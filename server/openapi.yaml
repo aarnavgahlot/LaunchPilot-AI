@@ -1,0 +1,140 @@
+openapi: 3.1.0
+info:
+  title: LaunchPilot AI API
+  version: 0.1.0
+  description: GitHub App authorization, agent planning, approved tool execution, persisted events, and verification.
+servers:
+  - url: http://localhost:3001/api
+paths:
+  /health:
+    get:
+      responses:
+        '200': { description: Service and integration mode summary }
+  /integrations:
+    get:
+      responses:
+        '200': { description: GitHub connection state and explicit mock/live provider modes }
+  /integrations/github:
+    get:
+      summary: Read GitHub connection state and requested permissions
+      responses:
+        '200': { description: Connected account identity without credentials }
+  /integrations/github/repositories:
+    get:
+      summary: List repositories accessible to the connected GitHub account
+      responses:
+        '200': { description: Paginated GitHub repository metadata }
+        '401': { description: GitHub account is not connected }
+        '429': { description: GitHub API rate limit reached }
+  /integrations/github/connect:
+    get:
+      summary: Start GitHub App user authorization
+      responses:
+        '302': { description: Redirect to GitHub authorization with CSRF state }
+        '409': { description: GitHub App credentials are not configured; mock mode is active }
+  /integrations/github/callback:
+    get:
+      summary: Validate OAuth state, exchange code, encrypt and store credentials
+      responses:
+        '302': { description: Return to the frontend after connection }
+        '400': { description: Authorization denied or invalid CSRF state }
+  /integrations/github/disconnect:
+    post:
+      summary: Revoke the GitHub App grant and delete encrypted credentials
+      responses:
+        '200': { description: Connection disconnected }
+        '502': { description: Local credential deleted but GitHub revocation was not confirmed }
+  /runs:
+    post:
+      summary: Create and begin an agent run
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string, minLength: 8, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [goal]
+              properties:
+                goal: { type: string, minLength: 8, maxLength: 2000 }
+                repository:
+                  type: object
+                  additionalProperties: false
+                  required: [owner, name]
+                  properties:
+                    owner: { type: string }
+                    name: { type: string }
+                readOnly: { type: boolean, default: false, description: 'When true, consequential external write steps are omitted from execution.' }
+      responses:
+        '202': { description: Run persisted and queued; poll its status, plan, events, and verification results }
+        '400': { description: Validation error }
+        '403': { description: Repository is not accessible to the connected GitHub user or required permission is missing }
+    get:
+      summary: List persisted runs
+      responses:
+        '200': { description: Runs sorted newest first }
+  /runs/{id}:
+    get:
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Run status and execution plan }
+        '404': { description: Run not found }
+  /runs/{id}/approval:
+    post:
+      summary: Approve or reject a pending consequential action
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+                required: [actionId, decision, digest]
+              properties:
+                actionId: { type: string }
+                decision: { type: string, enum: [approve, reject] }
+                  digest: { type: string, pattern: '^[a-f0-9]{64}$', description: 'Server-generated SHA-256 binding to the reviewed target, input payload and permissions.' }
+      responses:
+        '200': { description: Updated run after recording decision and any authorized execution }
+        '409': { description: Run/action is not awaiting approval }
+  /runs/{id}/continue:
+    post:
+      summary: Answer a clarification request or retry failed actions
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                repository:
+                  type: object
+                  required: [owner, name]
+                  properties:
+                    owner: { type: string }
+                    name: { type: string }
+      responses:
+        '200': { description: Continued run }
+        '409': { description: Run cannot be continued }
+  /runs/{id}/cancel:
+    post:
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Cancelled run }
+  /runs/{id}/events:
+    get:
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Chronological persisted execution events }
+  /runs/{id}/verifications:
+    get:
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Evidence-backed verification results }
